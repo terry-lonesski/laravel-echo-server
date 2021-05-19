@@ -1,8 +1,8 @@
 let fs = require('fs');
 let request = require('request');
-import { PresenceChannel } from './presence-channel';
-import { PrivateChannel } from './private-channel';
-import { Log } from './../log';
+import {PresenceChannel} from './presence-channel';
+import {PrivateChannel} from './private-channel';
+import {Log} from './../log';
 
 export class Channel {
     /**
@@ -76,73 +76,29 @@ export class Channel {
                 this.io.sockets.connected[socket.id]
                     .broadcast.to(data.channel)
                     .emit(data.event, data.channel, data.data);
-
-                if (data.event!='client-typing') { // block hooks from firing on client typing
-                    data.data.event=data.event; // added client event name to catch it on server side
-                    this.hook(socket, data.channel, data.auth, "client_event", data.data);
-                }
             }
         }
-    }
-
-    /**
-     *
-     * @param {any} socket
-     * @param {string} channel
-     * @param {object} auth
-     * @param {string} event
-     * @param {object} payload
-     */
-    hook(socket:any, channel: any, auth: any, event: string, payload: object) {
-        if (typeof this.options.hookEndpoint == 'undefined' ||
-            !this.options.hookEndpoint) {
-            return;
-        }
-
-        let hookEndpoint = this.options.hookEndpoint;
-
-        let options = this.prepareHookHeaders(socket, auth, channel, hookEndpoint, event, payload);
-
-        this.request.post(options, (error, response, body, next) => {
-            if (error) {
-                if (this.options.devMode) {
-                    Log.error(`[${new Date().toLocaleTimeString()}] - Error call ${event} hook ${socket.id} for ${options.form.channel}`);
-                }
-                Log.error(error);
-            } else if (response.statusCode !== 200) {
-                if (this.options.devMode) {
-                    Log.warning(`[${new Date().toLocaleTimeString()}] - Error call ${event} hook ${socket.id} for ${options.form.channel}`);
-                    Log.error(response.body);
-                }
-            } else {
-                if (this.options.devMode) {
-                    Log.info(`[${new Date().toLocaleTimeString()}] - Call ${event} hook for ${socket.id} for ${options.form.channel}: ${response.body}`);
-                }
-            }
-        });
     }
 
     /**
      * Prepare headers for request to app server.
      *
      * @param {any} socket
-     * @param {any} auth
      * @param {string} channel
      * @param {string} hookEndpoint
      * @param {string} event
-     * @param {any} payload
      * @returns {any}
      */
-    prepareHookHeaders(socket: any, auth: any, channel: string, hookEndpoint: string, event: string, payload: any): any {
+    prepareHookHeaders(socket: any, channel: string, hookEndpoint: string, event: string): any {
         let hookHost = this.options.hookHost ? this.options.hookHost : this.options.authHost;
         let options = {
             url: hookHost + hookEndpoint,
             form: {
+                userId: socket.userId,
                 event: event,
                 channel: channel,
-                payload: payload
             },
-            headers: (auth && auth.headers) ? auth.headers : {}
+            headers: {}
         };
 
         options.headers['Cookie'] = socket.request.headers.cookie;
@@ -161,10 +117,37 @@ export class Channel {
 
             socket.leave(channel);
 
+            if (this.options.hookEndpoint) {
+                this.sendHook(socket, channel, 'leave');
+            }
+
             if (this.options.devMode) {
                 Log.info(`[${new Date().toISOString()}] - ${socket.id} left channel: ${channel} (${reason})`);
             }
         }
+    }
+
+    sendHook(socket: any, channel: string, event: string) {
+        let hookEndpoint = this.options.hookEndpoint;
+        let options = this.prepareHookHeaders(socket, channel, hookEndpoint, event);
+
+        this.request.post(options, (error, response, body, next) => {
+            if (error) {
+                if (this.options.devMode) {
+                    Log.error(`[${new Date().toLocaleTimeString()}] - Error call ${event} hook ${socket.id} for ${options.form.channel}`);
+                }
+                Log.error(error);
+            } else if (response.statusCode !== 200) {
+                if (this.options.devMode) {
+                    Log.warning(`[${new Date().toLocaleTimeString()}] - Error call ${event} hook ${socket.id} for ${options.form.channel}`);
+                    Log.error(response.body);
+                }
+            } else {
+                if (this.options.devMode) {
+                    Log.info(`[${new Date().toLocaleTimeString()}] - Call ${event} hook for ${socket.id} for ${options.form.channel}: ${response.body}`);
+                }
+            }
+        });
     }
 
     /**
@@ -192,7 +175,8 @@ export class Channel {
                 var member = res.channel_data;
                 try {
                     member = JSON.parse(res.channel_data);
-                } catch (e) { }
+                } catch (e) {
+                }
 
                 this.presence.join(socket, data.channel, member);
             }
@@ -219,6 +203,11 @@ export class Channel {
      * On join a channel log success.
      */
     onJoin(socket: any, channel: string): void {
+        const match = channel.match(/user.(\d*)/);
+        if (match && match[1]) {
+            socket.userId = match[1];
+        }
+
         if (this.options.devMode) {
             Log.info(`[${new Date().toISOString()}] - ${socket.id} joined channel: ${channel}`);
         }

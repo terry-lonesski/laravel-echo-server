@@ -1,10 +1,16 @@
+
 let fs = require('fs');
 let request = require('request');
 import {PresenceChannel} from './presence-channel';
 import {PrivateChannel} from './private-channel';
 import {Log} from './../log';
+import {Database} from "../database";
 
 export class Channel {
+    /**
+     * Database instance.
+     */
+    db: Database;
     /**
      * Channels and patters for private channels.
      */
@@ -39,10 +45,18 @@ export class Channel {
         this.private = new PrivateChannel(options);
         this.presence = new PresenceChannel(io, options);
         this.request = request;
+        this.db = new Database(options);
 
         if (this.options.devMode) {
             Log.success('Channels are ready.');
         }
+    }
+
+    /**
+     * Get the members of a presence channel.
+     */
+    getMembers(channel: string): Promise<any> {
+        return this.db.get(channel + ":members");
     }
 
     /**
@@ -53,10 +67,50 @@ export class Channel {
             if (this.isPrivate(data.channel)) {
                 this.joinPrivate(socket, data);
             } else {
-                socket.join(data.channel);
                 this.onJoin(socket, data.channel);
+                socket.join(data.channel);
+
+                this.getMembers(data.channel).then(
+                    (members) => {
+
+                        this.removeInactive(data.channel, members);
+
+                        const member = {
+                            userId: socket.userId,
+                            socketId: socket.id
+                        }
+                        members = members || [];
+                        members.push(member);
+
+                        this.db.set(data.channel + ":members", members);
+                        this.db.set(data.channel + ":members-count", members.length);
+                    },
+                    (error) => Log.error(error)
+                );
             }
         }
+    }
+
+    /**
+     * Remove inactive channel members from the presence channel.
+     */
+    removeInactive(channel: string, members: any[]): Promise<any> {
+        return new Promise((resolve, reject) => {
+            this.io
+                .of("/")
+                .in(channel)
+                .clients((error, clients) => {
+                    members = members || [];
+                    members = members.filter((member) => {
+                        return clients.indexOf(member.socketId) >= 0;
+                    });
+
+                    this.db.set(channel + ":members", members);
+                    this.db.set(channel + ":members-count", members.length);
+
+                    resolve(members);
+                });
+        });
     }
 
     /**
@@ -113,6 +167,20 @@ export class Channel {
         if (channel) {
             if (this.isPresence(channel)) {
                 this.presence.leave(socket, channel)
+            } else {
+                this.getMembers(channel).then(
+                    (members) => {
+                        members = members || [];
+                        let member = members.find(
+                            (member) => member.socketId == socket.id
+                        );
+                        members = members.filter((m) => m.socketId != member.socketId);
+
+                        this.db.set(channel + ":members", members);
+                        this.db.set(channel + ":members-count", members.length);
+                    },
+                    (error) => Log.error(error)
+                );
             }
 
             socket.leave(channel);

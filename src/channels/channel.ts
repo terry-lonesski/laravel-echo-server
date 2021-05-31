@@ -174,7 +174,7 @@ export class Channel {
                         let member = members.find(
                             (member) => member.socketId == socket.id
                         );
-                        members = members.filter((m) => m.socketId != member.socketId);
+                        members = members.filter((m) => m.socketId != socket.id);
 
                         this.db.set(channel + ":members", members);
                         this.db.set(channel + ":members-count", members.length);
